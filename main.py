@@ -1,6 +1,4 @@
-def main():
-    print("Hello from tca-lakehouse!")
-
+from update_raw import run_pipeline
 
 if __name__ == "__main__":
-    main()
+    run_pipeline()
