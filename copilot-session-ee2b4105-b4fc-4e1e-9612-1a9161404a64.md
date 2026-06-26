@@ -3,8 +3,8 @@
 > [!NOTE]
 > - **Session ID:** `ee2b4105-b4fc-4e1e-9612-1a9161404a64`  
 > - **Started:** 6/26/2026, 10:37:58 AM  
-> - **Duration:** 39m 4s  
-> - **Exported:** 6/26/2026, 11:17:02 AM  
+> - **Duration:** 40m 56s  
+> - **Exported:** 6/26/2026, 11:18:55 AM  
 
 ---
 
@@ -3118,6 +3118,56 @@ $ cd /Users/tsteele/Documents/GitHub/2026-summer/tca-lakehouse && strings tca_da
 - **`raw_staging`**: dlt’s temporary working schema for load/merge operations. It appears because your resource uses `write_disposition="merge"`.
 
 So: you only *logically* need `raw`; `raw_staging` is an implementation detail dlt uses for safe merges. If you switch to pure append-only loading (no merge), `raw_staging` is typically not needed/used.
+
+---
+
+<sub>39m 4s</sub>
+
+### Info
+
+Session shared successfully to:
+/Users/tsteele/Documents/GitHub/2026-summer/tca-lakehouse/copilot-session-ee2b4105-b4fc-4e1e-9612-1a9161404a64.md
+
+---
+
+<sub>40m 14s</sub>
+
+### User
+
+is this currently doing upserts
+
+---
+
+<sub>40m 17s</sub>
+
+### Copilot
+
+Yes — **currently it is doing upserts**.
+
+In `update_raw.py`, the resource is configured with:
+
+- `write_disposition="merge"`
+- `primary_key=["source_file", "record_index"]`
+
+That means dlt merges on that key (update existing row if key exists, insert if not).
+
+---
+
+<sub>40m 32s</sub>
+
+### User
+
+so idempotent?
+
+---
+
+<sub>40m 38s</sub>
+
+### Copilot
+
+Yes — **idempotent for the same file contents and row ordering**.
+
+With `merge` on `["source_file", "record_index"]`, rerunning the same export file won’t create duplicates; it will match and update the same keys.
 
 ---
 
