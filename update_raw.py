@@ -1,45 +1,21 @@
 import dlt
 import json
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 
-def _unmarshal_dynamodb_value(value: Any) -> Any:
-    if not isinstance(value, dict):
-        if isinstance(value, list):
-            return [_unmarshal_dynamodb_value(v) for v in value]
-        return value
-
-    if len(value) == 1:
-        dtype, inner = next(iter(value.items()))
-        if dtype == "S":
-            return inner
-        if dtype == "N":
-            return Decimal(inner)
-        if dtype == "BOOL":
-            return inner
-        if dtype == "NULL":
-            return None
-        if dtype == "M":
-            return {k: _unmarshal_dynamodb_value(v) for k, v in inner.items()}
-        if dtype == "L":
-            return [_unmarshal_dynamodb_value(v) for v in inner]
-        if dtype == "SS":
-            return list(inner)
-        if dtype == "NS":
-            return [Decimal(v) for v in inner]
-        if dtype == "BS":
-            return list(inner)
-        if dtype == "B":
-            return inner
-
-    return {k: _unmarshal_dynamodb_value(v) for k, v in value.items()}
+def _extract_dynamodb_scalar(value: Any) -> str | None:
+    if not isinstance(value, dict) or len(value) != 1:
+        return None
+    dtype, inner = next(iter(value.items()))
+    if dtype in {"S", "N", "BOOL"}:
+        return str(inner)
+    return None
 
 
 def load_dynamodb_json_file(path: Path) -> list[dict]:
     """
-    Load a DynamoDB PIT-export JSON file and unmarshal DynamoDB JSON types.
+    Load a DynamoDB PIT-export JSON file as records.
     Supports both JSON arrays and newline-delimited JSON objects.
     """
     content = path.read_text().strip()
@@ -53,40 +29,49 @@ def load_dynamodb_json_file(path: Path) -> list[dict]:
     except json.JSONDecodeError:
         raw_records = [json.loads(line) for line in content.splitlines() if line.strip()]
 
-    items: list[dict] = []
-    for record in raw_records:
+    return raw_records
+
+
+def build_raw_rows(records: list[dict], file_path: Path) -> list[dict]:
+    """
+    Build raw-preserved rows that avoid nested table expansion.
+    """
+    file_modified_at = file_path.stat().st_mtime
+    rows: list[dict] = []
+
+    for record_index, record in enumerate(records, start=1):
         item = record.get("Item", record)
-        items.append(_unmarshal_dynamodb_value(item))
-    return items
+        rows.append(
+            {
+                "source_file": file_path.name,
+                "record_index": record_index,
+                "file_modified_at": file_modified_at,
+                "pk": _extract_dynamodb_scalar(item.get("pk")) if isinstance(item, dict) else None,
+                "sk": _extract_dynamodb_scalar(item.get("sk")) if isinstance(item, dict) else None,
+                "payload_json": json.dumps(record, separators=(",", ":"), ensure_ascii=False),
+            }
+        )
 
-
-def synthesize_incremental(items: list[dict], file_path: Path) -> None:
-    """
-    PIT exports do not contain updated_at timestamps.
-    We synthesize one using the file's modified time.
-    """
-    ts = file_path.stat().st_mtime
-    for item in items:
-        item["updated_at"] = ts
+    return rows
 
 
 @dlt.source
 def export_files_source(export_folder: str):
     """
-    Reads all JSON files in the export folder and yields a single
-    dlt resource that updates the RAW layer idempotently.
+    Reads all JSON files in the export folder and yields a raw-preserved
+    dlt resource that avoids nested table fan-out.
     """
     folder = Path(export_folder)
 
     for file_path in sorted(folder.glob("*.json")):
-        items = load_dynamodb_json_file(file_path)
-        synthesize_incremental(items, file_path)
+        records = load_dynamodb_json_file(file_path)
+        rows = build_raw_rows(records, file_path)
 
         yield dlt.resource(
-            items,
-            name="dynamo_items",
-            primary_key=["pk", "sk"],
-            incremental=dlt.sources.incremental("updated_at")
+            rows,
+            name="dynamo_items_raw",
+            primary_key=["source_file", "record_index"],
+            write_disposition="merge",
         )
 
 
